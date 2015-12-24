@@ -1,12 +1,14 @@
 package com.skyrealm.jamcloud;
 
-import android.app.ProgressDialog;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.NavigationView;
 import android.support.v4.view.GravityCompat;
@@ -19,14 +21,18 @@ import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
-import android.widget.ProgressBar;
+import android.widget.ListView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.gcm.GoogleCloudMessaging;
+import com.google.android.gms.iid.InstanceID;
 import com.spotify.sdk.android.authentication.AuthenticationClient;
 import com.spotify.sdk.android.authentication.AuthenticationRequest;
 import com.spotify.sdk.android.authentication.AuthenticationResponse;
@@ -35,51 +41,52 @@ import com.spotify.sdk.android.player.ConnectionStateCallback;
 import com.spotify.sdk.android.player.Player;
 import com.spotify.sdk.android.player.PlayerNotificationCallback;
 import com.spotify.sdk.android.player.PlayerState;
-import com.spotify.sdk.android.player.PlayerStateCallback;
 import com.spotify.sdk.android.player.Spotify;
 
-import org.apache.http.HttpStatus;
-import org.apache.http.NameValuePair;
+import org.apache.http.*;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.w3c.dom.Text;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
-import javax.net.ssl.HttpsURLConnection;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.util.Timer;
+import java.util.TimerTask;
 
 public class MainActivity extends AppCompatActivity
         implements NavigationView.OnNavigationItemSelectedListener, PlayerNotificationCallback, ConnectionStateCallback {
     android.support.v7.app.AlertDialog alert3;
 
 
-    Button partycloud, syncplay;
+    Button partycloud, syncplay, searchSongButton;
     JSONParser jsonParser = new JSONParser();
     String Trackname, Artist, albpic, trackid = "50kpGaPAhYJ3sGmk6vplg0";
     TextView Artistname, Tracker, leftcurrent, rightduration;
     String response= "";
     ImageButton playpause;
     ImageView albumpic;
+    AlertDialog popup_search_song, popup_search_result;
     SeekBar progress;
+    PlayerState playerstate;
     private int duration, currentspot;
+    int progressTime;
+    send_token_to_server send_token_to_server;
+    SharedPreferences sharedPreferences;
+    String user = "rockyfish";
+
     int playbut = 1;
     private static final int REQUEST_CODE = 1337;
     private String token;
@@ -88,9 +95,13 @@ public class MainActivity extends AppCompatActivity
     // TODO: Replace with your redirect URI
     private static final String REDIRECT_URI = "jamcloud://callback";
     private String GetURL;
+    ArrayList<ArrayList<String>> all_track_info;
+    Timer t;
+    int seekBarCounter;
+    String track_num, pauseTime;
 
 
-    private Player mPlayer;
+    Player mPlayer;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -102,7 +113,9 @@ public class MainActivity extends AppCompatActivity
         Artistname = (TextView) findViewById(R.id.Artist);
         albumpic = (ImageView) findViewById(R.id.Artistpicture);
         progress = (SeekBar) findViewById(R.id.seekBar);
+        searchSongButton = (Button) findViewById(R.id.searchSongButton);
         int color = Color.parseColor("#ffffff");
+        sharedPreferences = this.getSharedPreferences("GCM", MODE_PRIVATE);
 
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
 
@@ -142,6 +155,27 @@ public class MainActivity extends AppCompatActivity
         });
 
 
+        searchSongButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                LayoutInflater searchInflater = LayoutInflater.from(MainActivity.this);
+                AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                View view = searchInflater.inflate(R.layout.popup_search_song, null);
+                builder.setView(view);
+                popup_search_song = builder.create();
+                popup_search_song.show();
+                Button searchButton = (Button) view.findViewById(R.id.searchButton);
+                final EditText songEditText = (EditText) view.findViewById(R.id.songEditText);
+                searchButton.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        search_song search = new search_song();
+                        search.execute(songEditText.getText().toString());
+                    }
+                });
+            }
+        });
+
 
         playpause.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -149,10 +183,7 @@ public class MainActivity extends AppCompatActivity
                 if (playbut == 1) {
                     playpause.setImageResource(R.drawable.Play_icon);
                     playbut = 0;
-                    new Getinfo().execute();
                     mPlayer.pause();
-
-
                 } else {
                     playpause.setImageResource(R.drawable.Pause_icon);
                     playbut = 1;
@@ -182,24 +213,19 @@ public class MainActivity extends AppCompatActivity
 
         AuthenticationClient.openLoginActivity(MainActivity.this, REQUEST_CODE, request);
 
-        new Getinfo().execute();
-        progress.setMax(duration);
-        int test = duration;
-
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
 
 
-            int prog = 0;
 
             @Override
-            public void onProgressChanged(SeekBar seekBar, int progresValue, boolean fromUser) {
-                prog = progresValue;
-                mPlayer.seekToPosition(prog);
+            public void onProgressChanged(SeekBar seekBar, final int progresValue, boolean fromUser) {
+                mPlayer.seekToPosition(progresValue);
+                seekBarCounter = progresValue / 1000;
+                seekBarCounter++;
             }
 
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
-                new Getinfo().execute();
                 progress.setMax(duration);
 
             }
@@ -282,9 +308,6 @@ public class MainActivity extends AppCompatActivity
                         mPlayer = player;
                         mPlayer.addConnectionStateCallback(MainActivity.this);
                         mPlayer.addPlayerNotificationCallback(MainActivity.this);
-                        mPlayer.play("spotify:track:" + trackid);
-                        new Getinfo().execute();
-
 
                     }
 
@@ -305,6 +328,7 @@ public class MainActivity extends AppCompatActivity
     @Override
     public void onLoggedIn() {
         Log.d("MainActivity", "User logged in");
+        new register_in_background().execute();
     }
 
     @Override
@@ -329,7 +353,34 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onPlaybackEvent(EventType eventType, PlayerState playerState) {
-        Log.d("MainActivity", "Playback event received: " + eventType.name());
+        if(eventType.equals(EventType.PLAY)) {
+            t = new Timer();
+            progress.setMax(0);
+            progress.setMax(playerState.durationInMs);
+
+            // This will trigger itself every one second.
+            t.schedule(new TimerTask() {
+                @Override
+                //turn the position into seconds and multiply the counter
+                public void run() {
+                    progress.setProgress(seekBarCounter * 1000);
+                    if(seekBarCounter == 0)
+                    {
+                        seekBarCounter++;
+                    }
+                }
+            }, 0, 1000);
+
+        } else if (eventType.equals(EventType.PAUSE))
+        {
+            send_info_on_pause send_info_on_pause = new send_info_on_pause();
+            send_info_on_pause.execute(user, track_num, String.valueOf(playerState.positionInMs));
+            t.cancel();
+        } else if (eventType.equals(EventType.TRACK_END))
+        {
+            seekBarCounter = 0;
+            t.cancel();
+        }
     }
 
     @Override
@@ -344,12 +395,15 @@ public class MainActivity extends AppCompatActivity
     }
 
     class Getinfo extends AsyncTask<String, String, String> {
-        String Forgot_URL = "https://api.spotify.com/v1/tracks/" + trackid;
+        String tracknum = null;
         @Override
         protected String doInBackground(String... args) {
             // TODO Auto-generated method stub
             // here Check for success tag
+            trackid = args[0].replace("spotify:track:", "");
 
+            String Forgot_URL = "https://api.spotify.com/v1/tracks/" + trackid;
+            tracknum = args[0];
 
 
             try {
@@ -379,6 +433,13 @@ public class MainActivity extends AppCompatActivity
                 Artistname.setText(Artist);
                 Tracker.setText(Trackname);
                 new ImageLoadTask(albpic, albumpic).execute();
+
+                //play the track
+                mPlayer.play(tracknum);
+                seekBarCounter = 0;
+                progressTime = 0;
+                //set the playpause button to show the pause icon
+                playpause.setImageResource(R.drawable.Pause_icon);
 
             }else{
                 Toast.makeText(MainActivity.this, "Return Null", Toast.LENGTH_LONG).show();
@@ -422,7 +483,186 @@ public class MainActivity extends AppCompatActivity
 
     }
 
+    //Class made to search for the song and populate a listview
+    class search_song extends AsyncTask<String, Void, String>
+    {
+
+        JSONArray jsonArray = null;
+        @Override
+        protected String doInBackground(String... params) {
+            params[0] = params[0].replace(" ", "+");
+            String url = "http://ws.spotify.com/search/1/track.json?q=" + params[0];
+            org.apache.http.HttpResponse response = null;
+            String responseBody = null;
+            HttpClient httpClient = new DefaultHttpClient();
+
+            HttpGet httpPost = new HttpGet(url);
+            try {
+                response = httpClient.execute(httpPost);
+                responseBody = EntityUtils.toString(response.getEntity());
+                try {
+                    all_track_info = new ArrayList<ArrayList<String>>();
+                    JSONObject jsonObject = new JSONObject(responseBody);
+                    JSONArray object = jsonObject.getJSONArray("tracks");
+                    for(int i = 0; i < object.length(); i++)
+                    {
+                        ArrayList<String> temp = new ArrayList<String>();
+                        //get the track number
+                        String track_num = object.getJSONObject(i).getString("href");
+                        //get the track name
+                        String track_name = object.getJSONObject(i).getString("name");
+                        JSONArray artists = object.getJSONObject(i).getJSONArray("artists");
+                        String artist = artists.getJSONObject(0).getString("name");
+                        temp.add(track_name);
+                        temp.add(track_num);
+                        temp.add(artist);
+                        all_track_info.add(temp);
+                    }
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+                // writing response to log
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        protected void onPostExecute(String result)
+        {
+            SearchSongAdapter adapter = new SearchSongAdapter(MainActivity.this, all_track_info);
+            //popup inflater for results
+            LayoutInflater layoutInflater = LayoutInflater.from(MainActivity.this);
+            AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+            View view = layoutInflater.inflate(R.layout.popup_search_result, null);
+            builder.setView(view);
+            popup_search_result = builder.create();
+            popup_search_result.show();
+
+            // get listview and set the adapter
+            ListView listView = (ListView) view.findViewById(R.id.songListView);
+            listView.setAdapter(adapter);
+            listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+                @Override
+                //on item click, call get_info and start the track
+                public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                    track_num = all_track_info.get(position).get(1);
+                    new Getinfo().execute(track_num);
+                    popup_search_song.dismiss();
+                    popup_search_result.dismiss();
+                }
+            });
+        }
+    }
+    class register_in_background extends AsyncTask<Void, Void, String>
+    {
+
+        @Override
+        protected String doInBackground(Void... params) {
+            String token = null;
+            try {
+                // [START register_for_gcm]
+                // Initially this call goes out to the network to retrieve the token, subsequent calls
+                // are local.
+                // R.string.gcm_defaultSenderId (the Sender ID) is typically derived from google-services.json.
+                // See https://developers.google.com/cloud-messaging/android/start for details on this file.
+                // [START get_token]
+                InstanceID instanceID = InstanceID.getInstance(MainActivity.this);
+                token = instanceID.getToken("478628419848",
+                        GoogleCloudMessaging.INSTANCE_ID_SCOPE, null);
+                // [END get_token]
+                Log.d("token","GCM Registration Token: " + token);
 
 
+                // You should store a boolean that indicates whether the generated token has been
+                // senrest to your server. If the boolean is false, send the token to your server,
+                // otherwise your server should have already received the token.
+                // [END register_for_gcm]
+            } catch (Exception e) {
+                Log.d("Tag", "Failed to complete token refresh", e);
+                // If an exception happens while fetching the new token or updating our registration data
+                // on a third-party server, this ensures that we'll attempt the update at a later time.
+            }
+
+            return token;
+        }
+
+        public void onPostExecute(String result)
+        {
+            Toast.makeText(MainActivity.this, result, Toast.LENGTH_LONG).show();
+            send_token_to_server = new send_token_to_server();
+            send_token_to_server.execute(result);
+        }
+    }
+
+    class send_token_to_server extends AsyncTask<String, Void, String>
+    {
+        String token = null;
+        String responseBody = null;
+
+        @Override
+        protected String doInBackground(String... params) {
+            token = params[0];
+            HttpResponse response;
+            HttpClient httpClient = new DefaultHttpClient();
+
+            HttpPost httpPost = new HttpPost("Http://www.skyrealmstudio.com/cgi-bin/JamCloud/SendToken.py");
+
+            List<NameValuePair> nameValuePair = new ArrayList<NameValuePair>();
+            nameValuePair.add(new BasicNameValuePair("Username", user));
+            nameValuePair.add(new BasicNameValuePair("Token", token));
+
+
+            try {
+                httpPost.setEntity(new UrlEncodedFormEntity(nameValuePair));
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            }
+            try {
+                response = httpClient.execute(httpPost);
+                responseBody = EntityUtils.toString(response.getEntity());
+                // writing response to log
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return responseBody;
+        }
+
+        public void onPostExecute(String result)
+        {
+            Toast.makeText(MainActivity.this, result, Toast.LENGTH_LONG).show();
+            sharedPreferences.edit().putString("Token", token).apply();
+        }
+    }
+
+    class send_info_on_pause extends AsyncTask<String, Void, Void> {
+
+        @Override
+        protected Void doInBackground(String... params) {
+            HttpResponse response;
+            HttpClient httpClient = new DefaultHttpClient();
+
+            HttpPost httpPost = new HttpPost("http://www.skyrealmstudio.com/cgi-bin/JamCloud/send_info_on_pause.py");
+
+            List<NameValuePair> nameValuePair = new ArrayList<NameValuePair>();
+            nameValuePair.add(new BasicNameValuePair("Username", params[0]));
+            nameValuePair.add(new BasicNameValuePair("Track_Num", params[1]));
+            nameValuePair.add(new BasicNameValuePair("Current_Position", params[2]));
+
+            try {
+                httpPost.setEntity(new UrlEncodedFormEntity(nameValuePair));
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            }
+            try {
+                response = httpClient.execute(httpPost);
+
+                // writing response to log
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+    }
 
 }
