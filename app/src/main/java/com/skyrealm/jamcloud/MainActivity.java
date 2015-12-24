@@ -1,14 +1,16 @@
 package com.skyrealm.jamcloud;
 
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.Handler;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.NavigationView;
 import android.support.v4.view.GravityCompat;
@@ -86,6 +88,8 @@ public class MainActivity extends AppCompatActivity
     send_token_to_server send_token_to_server;
     SharedPreferences sharedPreferences;
     String user = "rockyfish";
+    private BroadcastReceiver resumeReceiver, pauseReceiver;
+    IntentFilter resumeFilter, pauseFilter;
 
     int playbut = 1;
     private static final int REQUEST_CODE = 1337;
@@ -116,8 +120,26 @@ public class MainActivity extends AppCompatActivity
         searchSongButton = (Button) findViewById(R.id.searchSongButton);
         int color = Color.parseColor("#ffffff");
         sharedPreferences = this.getSharedPreferences("GCM", MODE_PRIVATE);
+        resumeFilter = new IntentFilter("PLAY");
+        pauseFilter = new IntentFilter("PAUSE");
 
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
+        resumeReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if(mPlayer != null)
+                {
+                    mPlayer.resume();
+                }
+            }
+        };
+
+        pauseReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                mPlayer.pause();
+            }
+        };
 
         fab.setColorFilter(color);
         fab.setOnClickListener(new View.OnClickListener() {
@@ -250,10 +272,32 @@ public class MainActivity extends AppCompatActivity
     }
 
     @Override
+    public void onResume()
+    {
+        super.onResume();
+        registerReceiver(resumeReceiver, resumeFilter);
+        registerReceiver(pauseReceiver, pauseFilter);
+    }
+
+    @Override
+    public void onPause()
+    {
+        super.onPause();
+        unregisterReceiver(pauseReceiver);
+        unregisterReceiver(resumeReceiver);
+    }
+
+
+    @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Inflate the menu; this adds items to the action bar if it is present.
         getMenuInflater().inflate(R.menu.main, menu);
         return true;
+    }
+
+    public Player set_player()
+    {
+        return mPlayer;
     }
 
     @Override
@@ -371,10 +415,11 @@ public class MainActivity extends AppCompatActivity
                 }
             }, 0, 1000);
 
+            new send_song_info_to_server().execute(user, track_num, String.valueOf(playerState.positionInMs), "PLAY");
         } else if (eventType.equals(EventType.PAUSE))
         {
-            send_info_on_pause send_info_on_pause = new send_info_on_pause();
-            send_info_on_pause.execute(user, track_num, String.valueOf(playerState.positionInMs));
+            send_song_info_to_server send_song_info_to_server = new send_song_info_to_server();
+            send_song_info_to_server.execute(user, track_num, String.valueOf(playerState.positionInMs), "PAUSE");
             t.cancel();
         } else if (eventType.equals(EventType.TRACK_END))
         {
@@ -635,19 +680,22 @@ public class MainActivity extends AppCompatActivity
         }
     }
 
-    class send_info_on_pause extends AsyncTask<String, Void, Void> {
+    class send_song_info_to_server extends AsyncTask<String, Void, String> {
+        String type;
 
         @Override
-        protected Void doInBackground(String... params) {
+        protected String doInBackground(String... params) {
             HttpResponse response;
             HttpClient httpClient = new DefaultHttpClient();
 
-            HttpPost httpPost = new HttpPost("http://www.skyrealmstudio.com/cgi-bin/JamCloud/send_info_on_pause.py");
+            HttpPost httpPost = new HttpPost("http://www.skyrealmstudio.com/cgi-bin/JamCloud/send_song_info_to_server.py");
 
             List<NameValuePair> nameValuePair = new ArrayList<NameValuePair>();
             nameValuePair.add(new BasicNameValuePair("Username", params[0]));
             nameValuePair.add(new BasicNameValuePair("Track_Num", params[1]));
             nameValuePair.add(new BasicNameValuePair("Current_Position", params[2]));
+
+            type = params[3];
 
             try {
                 httpPost.setEntity(new UrlEncodedFormEntity(nameValuePair));
@@ -661,7 +709,15 @@ public class MainActivity extends AppCompatActivity
             } catch (IOException e) {
                 e.printStackTrace();
             }
-            return null;
+            return type;
+        }
+
+        protected void onPostExecute(String result) {
+            if (result.equals("PLAY")) {
+
+            } else if (result.equals("PAUSE")) {
+
+            }
         }
     }
 
